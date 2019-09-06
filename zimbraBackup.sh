@@ -85,6 +85,18 @@ version=1.0
 #put you Zimbra ip here
 ipZimbra="XXX.XXX.XXX.XXX"
 
+date="$(date +%F)"
+weekday="$(date +%u)"
+yesterday="$(date --date="yesterday" +%m"/"%d"/"%Y)"
+weekAgo="$(date --date="1 week ago" +%m"/"%d"/"%Y)"
+
+type="unknown"
+if [ "${weekday}" -eq 7 ] ; then
+	type="global"
+else
+	type="incremential"
+fi
+
 bzip2="/usr/bin/bzip2"
 awk="/bin/awk"
 zmmailbox="/opt/zimbra/bin/zmmailbox"
@@ -94,17 +106,15 @@ mysqlsock="/opt/zimbra/db/mysql.sock"
 zmlocalconfig="/opt/zimbra/bin/zmlocalconfig"
 zmslapcat="/opt/zimbra/libexec/zmslapcat"
 parallel="/bin/parallel"
-backupDir="/opt/backupZimbra"
+backupDir="/opt/backupZimbra_${date}_${type}/"
 allEmails="${backupDir}/allEmails.txt"
 allLists="${backupDir}/allLists.txt"
 backupParallel="${backupDir}/backupParallel.txt"
-date="$(date +%F)"
-weekday="$(date +%u)"
-yesterday="$(date --date="yesterday" +%m"/"%d"/"%Y)"
-weekAgo="$(date --date="1 week ago" +%m"/"%d"/"%Y)"
-
 
 # DO NOT CHANGE BELOW HERE
+
+# Create backup dir
+mkdir -p $backupDir && chown -R zimbra: $backupDir
 
 #if you have multiple zimbra servers, run only on the one you choose
 ip ad s | grep "${ipZimbra}" > /dev/null 2>&1
@@ -112,7 +122,6 @@ if [[  "$?" != 0 ]]; then
 	exit 1
 fi
 
-unalias rm > /dev/null 2>&1
 exec 1> "${backupDir}"/zimbraBackup-"$(date +%F)".log
 exec 2> "${backupDir}"/zimbraBackup-"$(date +%F)".err
 
@@ -128,18 +137,9 @@ cd "${backupDir}" 2> /dev/null || {
 	exit 3
 }
 
-rm "${allEmails}" "${allLists}" "${backupParallel}" 2> /dev/null
-rm "${date}"-* 2> /dev/null
-
 echo
 echo "$(date +"%F %T") - Starting backup"
 echo
-
-if [ "${weekday}" -eq 7 ] ; then
-	echo "$(date +"%F %T") - Starting erasing directory $(pwd)"
-	rm -fv *.tgz *.bz2 *.sql 2> /dev/null
-	echo "$(date +"%F %T") - Finished erasing directory $(pwd)"
-fi
 
 echo "$(date +"%F %T") - Starting MySQL backup"
 "${mysqldump}" -f -S "${mysqlsock}" -u zimbra --password="$(${zmlocalconfig} -s -m nokey zimbra_mysql_password)" --all-databases --single-transaction --flush-logs > "${backupDir}/${date}-mysql.sql"
@@ -151,7 +151,6 @@ echo "$(date +"%F %T") - Starting OpenLDAP backup"
 su - zimbra -c "${zmslapcat} ${backupDir}"
 mv "${backupDir}/ldap.bak" "${backupDir}/${date}-ldap.ldif"
 "${bzip2}" "${backupDir}/${date}-ldap.ldif"
-rm -f "${backupDir}"/ldap.bak.*
 
 echo "$(date +"%F %T") - Finished OpenLDAP backup"
 echo
@@ -194,7 +193,6 @@ echo "$(date +"%F %T") - Starting scheduling e-mail"
 
 # if today is Sunday, then do clear directory and do full backup. If not, do incremental backup
 if [ "${weekday}" -eq 7 ] ; then
-	rm "${weekAgo}"-* 2> /dev/null
 	"${awk}" -v arquivo="${backupDir}/${date}-full-" -v zmmailbox="${zmmailbox}" '{print zmmailbox " -z -m " $1 " getRestURL \"//?fmt=tgz\" > " arquivo $1 ".tgz"}' "${allEmails}" >> "${backupParallel}"
 else
 	"${awk}" -v arquivo="${backupDir}/${date}-inc-" -v zmmailbox="${zmmailbox}" -v yesterday="${yesterday}" '{print zmmailbox " -z -m " $1 " getRestURL \"//?fmt=tgz&query=date:" yesterday "\" > " arquivo $1 ".tgz"}' "${allEmails}" >> "${backupParallel}"
